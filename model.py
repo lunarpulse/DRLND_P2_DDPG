@@ -9,6 +9,8 @@ import torch.nn.functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+FCUNIT_1 = 256
+FCUNIT_2 = 128
 def hidden_init(layer):
     fan_in = layer.weight.data.size()[0]
     lim = 1. / np.sqrt(fan_in)
@@ -17,7 +19,7 @@ def hidden_init(layer):
 class Actor(nn.Module):
     """Actor (Policy) Model."""
 
-    def __init__(self, state_size, action_size, seed, fc1_units=300, fc2_units=150):
+    def __init__(self, state_size, action_size, seed, fc1_units=FCUNIT_1, fc2_units=FCUNIT_2):
         """Initialize parameters and build model.
         Params
         ======
@@ -46,7 +48,7 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     """Critic (Value) Model."""
 
-    def __init__(self, state_size, action_size, seed, fcs1_units=300, fc2_units=150):
+    def __init__(self, state_size, action_size, seed, fcs1_units=FCUNIT_1, fc2_units=FCUNIT_2):
         """Initialize parameters and build model.
         Params
         ======
