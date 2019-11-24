@@ -84,6 +84,14 @@ python -m ipykernel install --user --name drlnd --display-name "drlnd"
         - Windows (32-bit): [click here](https://s3-us-west-1.amazonaws.com/udacity-drlnd/P2/Reacher/Reacher_Windows_x86.zip)
         - Windows (64-bit): [click here](https://s3-us-west-1.amazonaws.com/udacity-drlnd/P2/Reacher/Reacher_Windows_x86_64.zip)
 
+1. Clone the repository (if you haven't already!), and navigate to the `python/` folder.  Then, install several dependencies. Only use this repository to get the environment set up not using afterwards.
+
+```bash
+git clone https://github.com/udacity/deep-reinforcement-learning.git
+cd deep-reinforcement-learning/python
+pip install
+```
+
 1. Place the file in the DRLND GitHub repository, in the root of this repository, and unzip (or decompress) the file.
 
 1. Refer the notebook `Continuous_Control-DDPG.ipynb` for using Deep Deterministic Policy Gradient (DDPG).
