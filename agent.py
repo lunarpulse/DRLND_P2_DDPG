@@ -7,8 +7,8 @@ import torch.optim as optim
 
 from model import Actor, Critic, OUNoise, ReplayBuffer
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
-BATCH_SIZE = 128        # minibatch size
+BUFFER_SIZE = int(5e5)  # replay buffer size
+BATCH_SIZE = 256        # minibatch size
 GAMMA = 0.99            # discount factor
 TAU = 1e-3              # coefficient for soft update of target
 LR_ACTOR = 1e-4         # learning rate of the actor 
@@ -18,7 +18,7 @@ WEIGHT_DECAY_CRITIC = 0.0        # L2 weight decayof CRITIC
 ONU_THETA = 0.15 # ONU noise init parameter theta
 ONU_SIGMA = 0.20 # ONU noise init parameter sigma
 EPS_START = 5.0         # initial value for epsilon in noise decay process in Agent.act()
-EPS_EP_END = 30        # episode to end the noise decay process
+EPS_EP_END = 2000        # episode to end the noise decay process
 EPS_FINAL = 0           # final value for epsilon after decay
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
