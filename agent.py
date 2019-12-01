@@ -13,7 +13,13 @@ GAMMA = 0.99            # discount factor
 TAU = 1e-3              # coefficient for soft update of target
 LR_ACTOR = 1e-4         # learning rate of the actor 
 LR_CRITIC = 1e-4        # learning rate of the critic
-WEIGHT_DECAY = 0        # L2 weight decay
+WEIGHT_DECAY_ACTOR = 0.0        # L2 weight decay of ACTOR
+WEIGHT_DECAY_CRITIC = 0.0        # L2 weight decayof CRITIC
+ONU_THETA = 0.15 # ONU noise init parameter theta
+ONU_SIGMA = 0.20 # ONU noise init parameter sigma
+EPS_START = 5.0         # initial value for epsilon in noise decay process in Agent.act()
+EPS_EP_END = 30        # episode to end the noise decay process
+EPS_FINAL = 0           # final value for epsilon after decay
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -27,20 +33,22 @@ class DDPG_agent():
         # Construct Actor networks
         self.actor_local = Actor(self.state_size, self.action_size, self.seed).to(device)
         self.actor_target = Actor(self.state_size, self.action_size, self.seed).to(device)
-        self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR)
+        self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR, weight_decay=WEIGHT_DECAY_ACTOR)
         
         # Construct Critic networks 
         self.critic_local = Critic(self.state_size, self.action_size, self.seed).to(device)
         self.critic_target = Critic(self.state_size, self.action_size, self.seed).to(device)
-        self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
+        self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY_CRITIC)
         
+        self.eps = EPS_START
+        self.eps_decay = 1/(EPS_EP_END)  # set decay rate based on epsilon end target
         # noise processing
-        self.noise = OUNoise((num_agents,action_size), random_seed)
+        self.noise = OUNoise( action_size, action_size, random_seed, theta=ONU_THETA, sigma=ONU_SIGMA)
         
         # Replay memory
         self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, random_seed)
         
-    def act(self, state, add_noise=True):
+    def act(self, state, add_noise=True, eps = 1.0):
         """Returns actions for given state as per current policy."""
         # convert state from numpy to pytorch array 
         state = torch.from_numpy(state).float().to(device)
@@ -49,7 +57,7 @@ class DDPG_agent():
             action = self.actor_local(state).cpu().data.numpy()
         self.actor_local.train()
         if add_noise:
-            action += self.noise.sample()
+            action += eps * self.noise.sample()
         
         return np.clip(action, -1, 1)
         
@@ -103,7 +111,13 @@ class DDPG_agent():
 
         # ----------------------- update target networks ----------------------- #
         self.soft_update(self.critic_local, self.critic_target, TAU)
-        self.soft_update(self.actor_local, self.actor_target, TAU)                     
+        self.soft_update(self.actor_local, self.actor_target, TAU)   
+
+        # update noise decay parameter
+        if self.eps >= EPS_FINAL:
+            self.eps -= self.eps_decay
+            self.eps = max(self.eps, EPS_FINAL)
+        self.noise.reset()
 
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.
