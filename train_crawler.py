@@ -58,7 +58,7 @@ def ddpg(n_episodes=2000, print_every = 10, max_t=1000):
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, average_score))
             torch.save(agents.actor_local.state_dict(), 'crawler_checkpoint_actor.pth')
             torch.save(agents.critic_local.state_dict(), 'crawler_checkpoint_critic.pth') 
-        if average_score > 40:
+        if average_score > 50:
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, average_score))
             break
     return scores
