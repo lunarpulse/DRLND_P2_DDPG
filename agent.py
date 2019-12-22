@@ -6,9 +6,10 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from model import Actor, Critic, OUNoise, ReplayBuffer
+from prioritized_memory import Memory
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
-BATCH_SIZE = 128        # minibatch size
+BUFFER_SIZE = int(5e5)  # replay buffer size
+BATCH_SIZE = 256        # minibatch size
 GAMMA = 0.99            # discount factor
 TAU = 1e-3              # coefficient for soft update of target
 LR_ACTOR = 1e-4         # learning rate of the actor 
@@ -46,7 +47,7 @@ class DDPG_agent():
         self.noise = OUNoise( action_size, action_size, random_seed, theta=ONU_THETA, sigma=ONU_SIGMA)
         
         # Replay memory
-        self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, random_seed)
+        self.memory = Memory(BUFFER_SIZE)
         
     def act(self, state, add_noise=True, eps = 1.0):
         """Returns actions for given state as per current policy."""
@@ -65,18 +66,18 @@ class DDPG_agent():
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
         for i in range(state.shape[0]):
-            self.memory.add(state[i, :], action[i], reward[i], next_state[i, :], done[i])
+            self.memory.add(reward[i], (state[i, :], action[i], reward[i], next_state[i, :], done[i]))
         
         # Learn, if enough samples are available in memory
         if len(self.memory) > BATCH_SIZE:
-            experiences = self.memory.sample()
-            self.learn(experiences, GAMMA)
+            mini_batch, idxs, is_weights = self.memory.sample(BATCH_SIZE)
+            self.learn(mini_batch, idxs, is_weights, GAMMA)
         
     def reset(self):
         """ reset noise """
         self.noise.reset()
         
-    def learn(self, experiences, gamma):
+    def learn(self, experience_batch, idxs, is_weights, gamma):
         """Update policy and value parameters using given batch of experience tuples.
         Q_targets = r + γ * critic_target(next_state, actor_target(next_state))
         where:
@@ -88,18 +89,41 @@ class DDPG_agent():
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
             gamma (float): discount factor
         """
-        states, actions, rewards, next_states, dones = experiences
+        # states, actions, rewards, next_states, dones = experience_batch
+        mini_batch = [*zip(*experience_batch)] #https://stackoverflow.com/questions/4937491/matrix-transpose-in-python
+
+        states = torch.FloatTensor(np.vstack(mini_batch[0])).to(device)
+        actions = torch.FloatTensor(list(mini_batch[1])).to(device)
+        rewards = np.array(mini_batch[2])
+        next_states = torch.FloatTensor(np.vstack(mini_batch[3])).to(device)
+        dones = np.array(mini_batch[4])
 
         # ---------------------------- update critic ---------------------------- #
         # Get predicted next-state actions and Q values from target models
         actions_next = self.actor_target(next_states)
         Q_targets_next = self.critic_target(next_states, actions_next)
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
+        Q_next_np = Q_targets_next.detach().cpu().numpy() #(BATCH_SIZE,1)
+        Q_next_np_tp = Q_next_np.transpose()
+        # Compute Q targets for current states (y_i)
+
+        dones_flipped = np.array([1 - x for x in dones])
+        # Q_targets = rewards[:,ai] + (gamma * Q_targets_next * (1 - dones[:,ai]))
+        mult_v = np.multiply(Q_next_np_tp, dones_flipped)
+        Q_targets_np_tp = rewards + (gamma * mult_v)
+        Q_targets = torch.FloatTensor(Q_targets_np_tp.transpose()).to(device)
+        # Q_targets = rewards + (gamma * Q_targets_next.cpu().numpy() * (1 - dones))
         Q_expected = self.critic_local(states, actions)
-        critic_loss = F.mse_loss(Q_expected, Q_targets)
+        critic_loss = (torch.FloatTensor(is_weights).to(device) * F.mse_loss(Q_expected, Q_targets)).mean()
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
+
+        # Update Priorities
+        errors = abs(Q_expected.detach().cpu().numpy() - Q_targets_np_tp.transpose())
+        # update priority
+        for i in range(BATCH_SIZE):
+            idx = idxs[i]
+            self.memory.update(idx, errors[i])
 
         # ---------------------------- update actor ---------------------------- #
         # Compute actor loss
