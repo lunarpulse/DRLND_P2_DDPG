@@ -114,7 +114,7 @@ class DDPG_agent():
         self.soft_update(self.actor_local, self.actor_target, TAU)   
 
         # update noise decay parameter
-        if self.eps >= EPS_FINAL:
+        if self.eps > EPS_FINAL:
             self.eps -= self.eps_decay
             self.eps = max(self.eps, EPS_FINAL)
         self.noise.reset()
