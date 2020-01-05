@@ -34,9 +34,10 @@ def env_parse(env):
 
     return state_size, action_size, num_agents
 
-def replay(env, agents, max_timesteps, actor_ckpt, critic_ckpt):
-    agents.actor_local.load_state_dict(torch.load(actor_ckpt, map_location='cpu'))
-    agents.critic_local.load_state_dict(torch.load(critic_ckpt, map_location='cpu'))
+def replay(env, agents, max_timesteps, model_ckpt):
+
+    state_dict = torch.load(model_ckpt, map_location=lambda storage, loc: storage)
+    agents.model.load_state_dict(state_dict)
 
     brain_name = env.brain_names[0]
     env_info = env.reset(train_mode=False)[brain_name]        
@@ -83,27 +84,35 @@ def plot_adv(fpath):
     plt.tight_layout()
     plt.savefig("./bestmodel_score.png")
 
-def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_score = 0, actor_ckpt = 'model_checkpoint_actor.pth', critic_ckpt = 'nodel_checkpoint_critic.pth'):
+def to_tensor( x, dtype=np.float32, device = 'cpu'):
+    return torch.from_numpy(np.array(x).astype(dtype)).to(device)
+
+def convert(env_info, device):
+    next_states = to_tensor(env_info.vector_observations, device = device)
+    rewards = to_tensor(env_info.rewards, device = device)
+    dones = to_tensor(env_info.local_done, dtype=np.uint8, device = device)
+    return rewards, next_states, dones
+
+def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_score = 0, model_ckpt = 'model_checkpoint.pth', device = 'cpu'):
     brain_name = env.brain_names[0]
+    env_info = env.reset(train_mode=True)[brain_name]
+    num_agents = len(env_info.agents)
     scores_deque = deque(maxlen=50)
     scores = []
     t0=time.time()
     for i_episode in range(1, n_episodes+1):
         env_info = env.reset(train_mode=True)[brain_name]
-        state = env_info.vector_observations
+        states = to_tensor(env_info.vector_observations, device = device)
         agents.reset()
         score = np.zeros(num_agents)
         for t in range(max_t):
-            action = agents.act(state)
-            env_info = env.step(action)[brain_name]
-            next_state = env_info.vector_observations
-            rewards = env_info.rewards
-            dones = env_info.local_done
-            agents.step(state, action, rewards, next_state, dones)
-            state = next_state
+            actions = agents.act(states)
+            env_info = env.step(actions.cpu().data.numpy())[brain_name]
+            rewards, next_states, dones = convert(env_info, device)
+            agents.step(states, actions, rewards, next_states, dones)
+            states = next_states
             score += rewards
-            if np.any(dones):
-                print('\tSteps: ', t)
+            if np.any(dones.cpu().data.numpy()):
                 break
             
         scores_deque.append(np.mean(score))
@@ -112,8 +121,7 @@ def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_sco
         average_score = np.mean(scores_deque)
         if i_episode % print_every == 0 or average_score > target_score:
             print('\rEpisode {}\tAverage Score: {:.2f}\tScore: {:.3f}'.format(i_episode, average_score, np.mean(score)))
-            torch.save(agents.actor_local.state_dict(), actor_ckpt)
-            torch.save(agents.critic_local.state_dict(), critic_ckpt) 
+            agents.save(model_ckpt)
         if average_score > target_score:
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, average_score))
             break
@@ -132,22 +140,22 @@ if __name__ == "__main__":
 
     fc1 = 256
     fc2 = 128
-    agent = ProximalPolicyOptimisation(env, state_dim, action_dim, hiddens=[fc1, fc2],  tmax=128, n_epoch=10, batch_size=128, eps=0.1, device=device)
+    batch_size = 256
+    agent = ProximalPolicyOptimisation(env, state_dim, action_dim, hiddens=[fc1, fc2],  tmax=batch_size, n_epoch=10, batch_size=batch_size, eps=0.1, device=device)
 
     n_episodes = 2000
     print_every = 10
     max_timesteps = 2000
     target_score = 30
-    actor_ckpt = 'reacher_checkpoint_actor.pth'
-    critic_ckpt = 'reacher_checkpoint_critic.pth'
+    model_pth = 'reacher_PPO_checkpoint.pth'
 
     # Training
-    score_list = train(env, agent, n_episodes, print_every, max_timesteps, target_score, actor_ckpt, critic_ckpt)
+    score_list = train(env, agent, n_episodes, print_every, max_timesteps, target_score, model_pth, device = device)
 
     # Plot
     plot(score_list)
 
     # Replay
-    replay(env, agent, max_timesteps, actor_ckpt, critic_ckpt)
+    replay(env, agent, max_timesteps, model_pth)
     
     env.close()

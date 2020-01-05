@@ -28,16 +28,46 @@ class ProximalPolicyOptimisation:
         self.rewards = None
         self.scores_by_episode = []
 
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.next_states = []
+        self.dones = []
+        self.target_q_value = []
+
+        self.GAE_log_prob = []
+        self.GAE_entropy = []
+        
         self.reset()
 
     def to_tensor(self, x, dtype=np.float32):
         return torch.from_numpy(np.array(x).astype(dtype)).to(self.device)
 
     def reset(self):
-        self.brain_name = self.env.brain_names[0]
-        env_info = self.env.reset(train_mode=True)[self.brain_name]
-        self.last_states = self.to_tensor(env_info.vector_observations)
+        ''' clear all the buffer lists '''
+        self.batch_number = 0
+        self.actions.clear()
+        self.rewards.clear()
+        self.states.clear()
+        self.next_states.clear()
+        self.dones.clear()
+        self.target_q_value.clear()
+        self.GAE_log_prob.clear()
+        self.GAE_entropy.clear()
 
+    def act(self, states):
+        self.model.eval()
+        with torch.no_grad():
+            actions, log_prob, entropy, target_q_value = self.model.actor_act(states)
+        self.model.train()
+        self.GAE_log_prob.append(log_prob.unsqueeze(0))
+        self.GAE_entropy.append(entropy.unsqueeze(0))
+        self.states.append(states.unsqueeze(0))
+        self.actions.append(actions.unsqueeze(0)) # all torch tensor
+        self.target_q_value.append(target_q_value.unsqueeze(0))
+
+        return actions
+        
     def collect_trajectories(self):
         buffer = dict([(k, []) for k in self.buffer_attrs])
 
@@ -108,69 +138,85 @@ class ProximalPolicyOptimisation:
 
         return GAE, returns
 
-    def step(self):
-        self.model.eval()
-
+    def step(self, states, actions, rewards, next_states, dones):
+        '''Save the env_infor to the agent's storage, when reached to the epoch, process all synchronously'''
         # Collect Trajetories
-        trajectories = self.collect_trajectories()
+        self.rewards.append(rewards)
+        self.next_states.append(next_states)
+        self.dones.append(dones)
+        score = rewards.sum(dim=0).mean()
 
-        # Calculate Score (averaged over agents)
-        score = trajectories["rewards"].sum(dim=0).mean()
+        # here to be passed after iteration batch 
+        if self.batch_number == self.batch_size - 1 :
+            self.batch_number = 0
+            self.model.eval()
+            # Calculate Score (averaged over agents)
+            score = torch.cat(self.rewards, dim=0).sum(dim=0).mean()
 
-        # Append Values collesponding to last states
-        last_values = self.model.state_values(self.last_states).detach()
-        advantages, returns = self.calc_returns(trajectories["rewards"],
-                                                trajectories["values"],
-                                                trajectories["dones"],
-                                                last_values)
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-6)
+            # Append Values collesponding to last states
+            # Get the expected_value
+            Expected_Q_values = self.model.critic_expect(next_states).detach()
+            advantages, returns = self.calc_returns(torch.stack(self.rewards),
+                                                    torch.cat(self.target_q_value, dim=0),
+                                                    torch.stack(self.dones),
+                                                    Expected_Q_values)
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-6)
 
-        # concat all agent 
-        for k, v in trajectories.items():
-            if len(v.shape) == 3:
-                trajectories[k] = v.reshape([-1, v.shape[-1]])
-            else:
-                trajectories[k] = v.reshape([-1])
-        advantages = advantages.reshape([-1])
-        returns = returns.reshape([-1])
+            # concat all info
+            actions = torch.stack(self.actions)
+            actions = actions.reshape([-1, actions.shape[-1]])
+            states = torch.stack(self.states)
+            states = states.reshape([-1, states.shape[-1]])
+            next_states = torch.stack(self.next_states)
+            next_states = next_states.reshape([-1, next_states.shape[-1]])
+            rewards = torch.stack(self.rewards).reshape([-1])
+            dones = torch.stack(self.dones).reshape([-1])
+            # target_q_value = torch.cat(self.target_q_value, dim=0).reshape([-1])
+            log_probs = torch.stack(self.GAE_log_prob).reshape([-1])
 
-        # Mini-batch update
-        self.model.train()
-        n_sample = advantages.shape[0]
-        n_batch = (n_sample - 1) // self.batch_size + 1
-        idx = np.arange(n_sample)
-        np.random.shuffle(idx)
-        for k, v in trajectories.items():
-            trajectories[k] = v[idx]
-        advantages, returns = advantages[idx], returns[idx]
+            advantages = advantages.reshape([-1])
+            returns = returns.reshape([-1])
 
-        for i_epoch in range(self.n_epoch):
-            for i_batch in range(n_batch):
-                idx_start = self.batch_size * i_batch
-                idx_end = self.batch_size * (i_batch + 1)
-                (states, actions, next_states, rewards, old_log_probs,
-                 old_values, dones) = [trajectories[k][idx_start:idx_end]
-                                       for k in self.buffer_attrs]
-                advantages_batch = advantages[idx_start:idx_end]
-                returns_batch = returns[idx_start:idx_end]
+            # Mini-batch update
+            self.model.train()
+            n_sample = advantages.shape[0]
+            idx = np.arange(n_sample)
+            np.random.shuffle(idx)
+            #shuffle all
+            states_mixed, actions_mixed, log_probs_mixed = states[idx], actions[idx], log_probs[idx]
+            advantages, returns = advantages[idx], returns[idx]
+            
+            n_batch = (n_sample - 1) // self.batch_size + 1
+            for i_epoch in range(self.n_epoch):
+                for i_batch in range(n_batch):
+                    idx_start = self.batch_size * i_batch
+                    idx_end = self.batch_size * (i_batch + 1)
 
-                _, log_probs, entropy, values = self.model(states, actions)
-                ratio = torch.exp(log_probs - old_log_probs)
-                ratio_clamped = torch.clamp(ratio, 1 - self.eps, 1 + self.eps)
-                adv_PPO = torch.min(ratio * advantages_batch, ratio_clamped * advantages_batch)
-                loss_actor = -torch.mean(adv_PPO) - 0.01 * entropy.mean()
-                loss_critic = 0.5 * (returns_batch - values).pow(2).mean()
-                loss = loss_actor + loss_critic
+                    states = states_mixed[idx_start:idx_end]
+                    actions= actions_mixed[idx_start:idx_end]
+                    old_log_probs = log_probs_mixed[idx_start:idx_end]
+                    advantages_batch = advantages[idx_start:idx_end]
+                    returns_batch = returns[idx_start:idx_end]
 
-                self.opt_model.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.)
-                self.opt_model.step()
-                del(loss)
+                    _, log_probs, entropy, values = self.model(states, actions)
+                    ratio = torch.exp(log_probs - old_log_probs)
+                    ratio_clamped = torch.clamp(ratio, 1 - self.eps, 1 + self.eps)
+                    adv_PPO = torch.min(ratio * advantages_batch, ratio_clamped * advantages_batch)
+                    loss_actor = -torch.mean(adv_PPO) - 0.01 * entropy.mean()
+                    loss_critic = 0.5 * (returns_batch - values).pow(2).mean()
+                    loss = loss_actor + loss_critic
 
-        self.model.eval()
-
+                    self.opt_model.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.)
+                    self.opt_model.step()
+                    del(loss)
+        else:
+            self.batch_number += 1
         return score
+        
+    def save(self, filename):
+        torch.save(self.model.state_dict(), filename)
 
 class GaussianActorCriticNetwork(nn.Module):
     def __init__(self, state_dim=1, action_dim=1, hiddens=[64, 64]):
@@ -185,20 +231,33 @@ class GaussianActorCriticNetwork(nn.Module):
 
     def forward(self, states, actions=None):
         phi = self.fc_hidden(states)
+        Q_value = self.fc_critic(phi).squeeze(-1)
+        
         mu = F.tanh(self.fc_actor(phi))
-        value = self.fc_critic(phi).squeeze(-1)
-
         dist = torch.distributions.Normal(mu, F.softplus(self.sigma))
         if actions is None:
             actions = dist.sample()
         log_prob = dist.log_prob(actions)
         log_prob = torch.sum(log_prob, dim=-1)
         entropy = torch.sum(dist.entropy(), dim=-1)
-        return actions, log_prob, entropy, value
 
-    def state_values(self, states):
+        return actions, log_prob, entropy, Q_value
+
+    def actor_act(self, states):
+        phi = self.fc_hidden(states)
+        target_q_value = self.fc_critic(phi).squeeze(-1)
+        mu = F.tanh(self.fc_actor(phi))
+        dist = torch.distributions.Normal(mu, F.softplus(self.sigma))
+        actions = dist.sample()
+        log_prob = dist.log_prob(actions)
+        log_prob = torch.sum(log_prob, dim=-1)
+        entropy = torch.sum(dist.entropy(), dim=-1)
+        return actions, log_prob, entropy, target_q_value
+
+    def critic_expect(self, states):
         phi = self.fc_hidden(states)
         return self.fc_critic(phi).squeeze(-1)
+
 class FCNetwork(nn.Module):
     def __init__(self, input_dim, hiddens, func=F.leaky_relu):
         super(FCNetwork, self).__init__()
