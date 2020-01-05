@@ -45,7 +45,7 @@ def replay(env, agents, max_timesteps, model_ckpt):
     scores = np.zeros(num_agents)                          
 
     for i in range(max_timesteps):
-        actions = agents.act(states, add_noise=False)                    
+        actions = agents.act(states)                    
         env_info = env.step(actions)[brain_name]        
         next_states = env_info.vector_observations        
         rewards = env_info.rewards                        
@@ -143,8 +143,8 @@ if __name__ == "__main__":
     batch_size = 256
     agent = ProximalPolicyOptimisation(env, state_dim, action_dim, hiddens=[fc1, fc2],  tmax=batch_size, n_epoch=10, batch_size=batch_size, eps=0.1, device=device)
 
-    n_episodes = 2000
-    print_every = 10
+    n_episodes = 150
+    print_every = 2
     max_timesteps = 2000
     target_score = 30
     model_pth = 'reacher_PPO_checkpoint.pth'
