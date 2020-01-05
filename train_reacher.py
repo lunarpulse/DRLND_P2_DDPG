@@ -1,6 +1,3 @@
-from unityagents import UnityEnvironment
-
-from agent import DDPG_agent
 import numpy as np
 import torch
 
@@ -10,6 +7,10 @@ import time
 import pickle
 import pandas as pd
 import matplotlib.pyplot as plt
+
+from unityagents import UnityEnvironment
+
+from PPO.agent import ProximalPolicyOptimisation
 
 def env_parse(env):
     brain_name = env.brain_names[0]
@@ -31,9 +32,9 @@ def env_parse(env):
     print('There are {} agents. Each observes a state with length: {}'.format(states.shape[0], state_size))
     print('The state for the first agent looks like:', states[0])
 
-    return brain, brain_name, state_size, action_size, num_agents
+    return state_size, action_size, num_agents
 
-def replay(env, max_timesteps, actor_ckpt, critic_ckpt):
+def replay(env, agents, max_timesteps, actor_ckpt, critic_ckpt):
     agents.actor_local.load_state_dict(torch.load(actor_ckpt, map_location='cpu'))
     agents.critic_local.load_state_dict(torch.load(critic_ckpt, map_location='cpu'))
 
@@ -82,7 +83,8 @@ def plot_adv(fpath):
     plt.tight_layout()
     plt.savefig("./bestmodel_score.png")
 
-def train(env, brain_name, agents, n_episodes=2000, print_every = 10, max_t=1000, target_score = 0, actor_ckpt = 'model_checkpoint_actor.pth', critic_ckpt = 'nodel_checkpoint_critic.pth'):
+def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_score = 0, actor_ckpt = 'model_checkpoint_actor.pth', critic_ckpt = 'nodel_checkpoint_critic.pth'):
+    brain_name = env.brain_names[0]
     scores_deque = deque(maxlen=50)
     scores = []
     t0=time.time()
@@ -102,7 +104,8 @@ def train(env, brain_name, agents, n_episodes=2000, print_every = 10, max_t=1000
             score += rewards
             if np.any(dones):
                 print('\tSteps: ', t)
-                break 
+                break
+            
         scores_deque.append(np.mean(score))
         scores.append(np.mean(score))
 
@@ -121,26 +124,30 @@ def train(env, brain_name, agents, n_episodes=2000, print_every = 10, max_t=1000
 
 
 if __name__ == "__main__":
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
     env = UnityEnvironment(file_name='./Reacher_Linux/Reacher.x86_64')
 
-    brain, brain_name, state_size, action_size, num_agents = env_parse(env)
+    state_dim, action_dim, num_agents = env_parse(env)
 
-    agents = DDPG_agent(state_size=state_size, action_size=action_size, num_agents=num_agents, random_seed=0)
-    
-    n_episodes = 150
-    print_every = 5
-    max_timesteps = 1000
+    fc1 = 256
+    fc2 = 128
+    agent = ProximalPolicyOptimisation(env, state_dim, action_dim, hiddens=[fc1, fc2],  tmax=128, n_epoch=10, batch_size=128, eps=0.1, device=device)
+
+    n_episodes = 2000
+    print_every = 10
+    max_timesteps = 2000
     target_score = 30
     actor_ckpt = 'reacher_checkpoint_actor.pth'
     critic_ckpt = 'reacher_checkpoint_critic.pth'
 
     # Training
-    score_list = train(env, brain_name, agents, n_episodes, print_every, max_timesteps, target_score, actor_ckpt, critic_ckpt)
+    score_list = train(env, agent, n_episodes, print_every, max_timesteps, target_score, actor_ckpt, critic_ckpt)
 
     # Plot
     plot(score_list)
 
     # Replay
-    replay(env, max_timesteps, actor_ckpt, critic_ckpt)
+    replay(env, agent, max_timesteps, actor_ckpt, critic_ckpt)
     
     env.close()
