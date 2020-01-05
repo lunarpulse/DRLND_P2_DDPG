@@ -4,20 +4,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-
-class PPOAgent:
+class ProximalPolicyOptimisation:
     buffer_attrs = [
         "states", "actions", "next_states",
         "rewards", "log_probs", "values", "dones",
     ]
 
-    def __init__(self, env, model, tmax=128, n_epoch=10, batch_size=128,
+    def __init__(self, env, state_dim, action_dim, hiddens=[256, 128],  tmax=128, n_epoch=10, batch_size=128,
                  gamma=0.99, gae_lambda=0.96, eps=0.10, device="cpu"):
         self.env = env
-        self.model = model
-        self.opt_model = optim.Adam(model.parameters(), lr=1e-4)
-        self.state_dim = model.state_dim
-        self.action_dim = model.action_dim
+        self.model = GaussianActorCriticNetwork(state_dim, action_dim, hiddens).to(device)
+        self.opt_model = optim.Adam(self.model.parameters(), lr=1e-4)
+        self.state_dim = self.model.state_dim
+        self.action_dim = self.model.action_dim
         self.tmax = tmax
         self.n_epoch = n_epoch
         self.batch_size = batch_size
@@ -172,3 +171,54 @@ class PPOAgent:
         self.model.eval()
 
         return score
+
+class GaussianActorCriticNetwork(nn.Module):
+    def __init__(self, state_dim=1, action_dim=1, hiddens=[64, 64]):
+        super(GaussianActorCriticNetwork, self).__init__()
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.fc_hidden = FCNetwork(state_dim, hiddens)
+        self.fc_actor = nn.Linear(hiddens[-1], action_dim)
+        self.fc_critic = nn.Linear(hiddens[-1], 1)
+        self.sigma = nn.Parameter(torch.zeros(action_dim))
+
+    def forward(self, states, actions=None):
+        phi = self.fc_hidden(states)
+        mu = F.tanh(self.fc_actor(phi))
+        value = self.fc_critic(phi).squeeze(-1)
+
+        dist = torch.distributions.Normal(mu, F.softplus(self.sigma))
+        if actions is None:
+            actions = dist.sample()
+        log_prob = dist.log_prob(actions)
+        log_prob = torch.sum(log_prob, dim=-1)
+        entropy = torch.sum(dist.entropy(), dim=-1)
+        return actions, log_prob, entropy, value
+
+    def state_values(self, states):
+        phi = self.fc_hidden(states)
+        return self.fc_critic(phi).squeeze(-1)
+class FCNetwork(nn.Module):
+    def __init__(self, input_dim, hiddens, func=F.leaky_relu):
+        super(FCNetwork, self).__init__()
+        self.func =  func
+
+        # Input Layer
+        fc_first = nn.Linear(input_dim, hiddens[0])
+        self.layers = nn.ModuleList([fc_first])
+        # Hidden Layers
+        layer_sizes = zip(hiddens[:-1], hiddens[1:])
+        self.layers.extend([nn.Linear(h1, h2)
+                            for h1, h2 in layer_sizes])
+
+        def xavier(m):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight.data)
+        self.layers.apply(xavier)
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = self.func(layer(x))
+
+        return x
