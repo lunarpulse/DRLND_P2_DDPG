@@ -41,18 +41,16 @@ def replay(env, agents, max_timesteps, model_ckpt):
 
     brain_name = env.brain_names[0]
     env_info = env.reset(train_mode=False)[brain_name]        
-    states = env_info.vector_observations                  
+    states =  to_tensor(env_info.vector_observations, device = device)                  
     scores = np.zeros(num_agents)                          
 
     for i in range(max_timesteps):
         actions = agents.act(states)                    
-        env_info = env.step(actions)[brain_name]        
-        next_states = env_info.vector_observations        
-        rewards = env_info.rewards                        
-        dones = env_info.local_done                 
+        env_info = env.step(actions.cpu().data.numpy())[brain_name]
+        rewards, next_states, dones = convert(env_info, device)
         scores += rewards                         
         states = next_states                              
-        if np.any(dones):                              
+        if np.any(dones.cpu().data.numpy()):                              
             break
     print("Scores:", scores)
 
@@ -97,7 +95,7 @@ def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_sco
     brain_name = env.brain_names[0]
     env_info = env.reset(train_mode=True)[brain_name]
     num_agents = len(env_info.agents)
-    scores_deque = deque(maxlen=50)
+    scores_deque = deque(maxlen=100)
     scores = []
     t0=time.time()
     for i_episode in range(1, n_episodes+1):
@@ -109,21 +107,20 @@ def train(env, agents, n_episodes=2000, print_every = 10, max_t=1000, target_sco
             actions = agents.act(states)
             env_info = env.step(actions.cpu().data.numpy())[brain_name]
             rewards, next_states, dones = convert(env_info, device)
-            agents.step(states, actions, rewards, next_states, dones)
             states = next_states
+            agents.step(states, actions, rewards, next_states, dones)
             score += rewards
             if np.any(dones.cpu().data.numpy()):
                 break
-            
-        scores_deque.append(np.mean(score))
-        scores.append(np.mean(score))
-
+        scores_deque.append(score.mean())
+        scores.append(score.mean())
         average_score = np.mean(scores_deque)
-        if i_episode % print_every == 0 or average_score > target_score:
-            print('\rEpisode {}\tAverage Score: {:.2f}\tScore: {:.3f}'.format(i_episode, average_score, np.mean(score)))
-            agents.save(model_ckpt)
+        if i_episode % print_every == 0:
+            print('\rEpisode {}\tAverage Score: {:.2f}\tScore: {:.3f}'.format(i_episode, average_score, score.mean()))
+            
         if average_score > target_score:
-            print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, average_score))
+            print('\rTraining Finished at the episode {}\t Average Score: {:.2f}'.format(i_episode, average_score))
+            agents.save(model_ckpt)
             break
     t1=time.time()
 

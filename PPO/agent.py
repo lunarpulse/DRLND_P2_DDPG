@@ -68,46 +68,6 @@ class ProximalPolicyOptimisation:
 
         return actions
         
-    def collect_trajectories(self):
-        buffer = dict([(k, []) for k in self.buffer_attrs])
-
-        for t in range(self.tmax):
-            memory = {}
-
-            # draw action from model
-            memory["states"] = self.last_states
-            pred = self.model(memory["states"])
-            pred = [v.detach() for v in pred]
-            memory["actions"], memory["log_probs"], _, memory["values"] = pred
-
-            # one step forward
-            actions_np = memory["actions"].cpu().numpy()
-            env_info = self.env.step(actions_np)[self.brain_name]
-            memory["next_states"] = self.to_tensor(env_info.vector_observations)
-            memory["rewards"] = self.to_tensor(env_info.rewards)
-            memory["dones"] = self.to_tensor(env_info.local_done, dtype=np.uint8)
-
-            # stack one step memory to buffer
-            for k, v in memory.items():
-                buffer[k].append(v.unsqueeze(0))
-
-            self.last_states = memory["next_states"]
-            r = np.array(env_info.rewards)[None,:]
-            if self.rewards is None:
-                self.rewards = r
-            else:
-                self.rewards = np.r_[self.rewards, r]
-
-            if memory["dones"].any():
-                rewards_mean = self.rewards.sum(axis=0).mean()
-                self.scores_by_episode.append(rewards_mean)
-                self.rewards = None
-
-        for k, v in buffer.items():
-            buffer[k] = torch.cat(v, dim=0)
-
-        return buffer
-
     def calc_returns(self, rewards, values, dones, last_values):
         n_step, n_agent = rewards.shape
 
@@ -144,14 +104,13 @@ class ProximalPolicyOptimisation:
         self.rewards.append(rewards)
         self.next_states.append(next_states)
         self.dones.append(dones)
-        score = rewards.sum(dim=0).mean()
 
         # here to be passed after iteration batch 
         if self.batch_number == self.batch_size - 1 :
             self.batch_number = 0
-            self.model.eval()
+            # self.model.eval()
             # Calculate Score (averaged over agents)
-            score = torch.cat(self.rewards, dim=0).sum(dim=0).mean()
+            # score = torch.cat(self.rewards, dim=0).sum(dim=0).mean()
 
             # Append Values collesponding to last states
             # Get the expected_value
@@ -213,7 +172,6 @@ class ProximalPolicyOptimisation:
                     del(loss)
         else:
             self.batch_number += 1
-        return score
         
     def save(self, filename):
         torch.save(self.model.state_dict(), filename)
