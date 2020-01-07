@@ -140,9 +140,9 @@ if __name__ == "__main__":
     batch_size = 256
     agent = ProximalPolicyOptimisation(env, state_dim, action_dim, num_agents = num_agents, hiddens=[fc1, fc2],  tmax=batch_size, n_epoch=10, batch_size=batch_size, eps=0.1, device=device)
 
-    n_episodes = 150
+    n_episodes = 200
     print_every = 2
-    max_timesteps = 2000
+    max_timesteps = 1000
     target_score = 30
     model_pth = 'reacher_PPO_checkpoint.pth'
 
