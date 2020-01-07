@@ -20,7 +20,7 @@ ONU_THETA = 0.15 # ONU noise init parameter theta
 ONU_SIGMA = 0.20 # ONU noise init parameter sigma
 EPS_START = 5.0         # initial value for epsilon in noise decay process in Agent.act()
 EPS_EP_END = 30        # episode to end the noise decay process
-EPS_FINAL = 0           # final value for epsilon after decay
+EPS_FINAL = 0.05           # final value for epsilon after decay
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -138,7 +138,7 @@ class DDPG_agent():
         self.soft_update(self.actor_local, self.actor_target, TAU)   
 
         # update noise decay parameter
-        if self.eps >= EPS_FINAL:
+        if self.eps > EPS_FINAL:
             self.eps -= self.eps_decay
             self.eps = max(self.eps, EPS_FINAL)
         self.noise.reset()

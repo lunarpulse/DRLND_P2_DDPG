@@ -10,7 +10,7 @@ class ProximalPolicyOptimisation:
         "rewards", "log_probs", "values", "dones",
     ]
 
-    def __init__(self, env, state_dim, action_dim, hiddens=[256, 128],  tmax=128, n_epoch=10, batch_size=128,
+    def __init__(self, env, state_dim, action_dim, num_agents = 1, hiddens=[256, 128], tmax=128, n_epoch=10, batch_size=128,
                  gamma=0.99, gae_lambda=0.96, eps=0.10, device="cpu"):
         self.env = env
         self.model = GaussianActorCriticNetwork(state_dim, action_dim, hiddens).to(device)
@@ -24,6 +24,7 @@ class ProximalPolicyOptimisation:
         self.gae_lambda = gae_lambda
         self.eps = eps
         self.device = device
+        self.gae = GAE(batch_size, num_agents, gamma, gae_lambda, device)
 
         self.rewards = None
         self.scores_by_episode = []
@@ -35,8 +36,8 @@ class ProximalPolicyOptimisation:
         self.dones = []
         self.target_q_value = []
 
-        self.GAE_log_prob = []
-        self.GAE_entropy = []
+        self.log_prob_gae = []
+        self.entropy_gae = []
         
         self.reset()
 
@@ -52,51 +53,21 @@ class ProximalPolicyOptimisation:
         self.next_states.clear()
         self.dones.clear()
         self.target_q_value.clear()
-        self.GAE_log_prob.clear()
-        self.GAE_entropy.clear()
+        self.log_prob_gae.clear()
+        self.entropy_gae.clear()
 
     def act(self, states):
         self.model.eval()
         with torch.no_grad():
             actions, log_prob, entropy, target_q_value = self.model.actor_act(states)
         self.model.train()
-        self.GAE_log_prob.append(log_prob.unsqueeze(0))
-        self.GAE_entropy.append(entropy.unsqueeze(0))
+        self.log_prob_gae.append(log_prob.unsqueeze(0))
+        self.entropy_gae.append(entropy.unsqueeze(0))
         self.states.append(states.unsqueeze(0))
         self.actions.append(actions.unsqueeze(0)) # all torch tensor
         self.target_q_value.append(target_q_value.unsqueeze(0))
 
         return actions
-        
-    def calc_returns(self, rewards, values, dones, last_values):
-        n_step, n_agent = rewards.shape
-
-        # Create empty buffer
-        GAE = torch.zeros_like(rewards).float().to(self.device)
-        returns = torch.zeros_like(rewards).float().to(self.device)
-
-        # Set start values
-        GAE_current = torch.zeros(n_agent).float().to(self.device)
-        returns_current = last_values
-        values_next = last_values
-
-        for irow in reversed(range(n_step)):
-            values_current = values[irow]
-            rewards_current = rewards[irow]
-            gamma = self.gamma * (1. - dones[irow].float())
-
-            # Calculate TD Error
-            td_error = rewards_current + gamma * values_next - values_current
-            # Update GAE, returns
-            GAE_current = td_error + gamma * self.gae_lambda * GAE_current
-            returns_current = rewards_current + gamma * returns_current
-            # Set GAE, returns to buffer
-            GAE[irow] = GAE_current
-            returns[irow] = returns_current
-
-            values_next = values_current
-
-        return GAE, returns
 
     def step(self, states, actions, rewards, next_states, dones):
         '''Save the env_infor to the agent's storage, when reached to the epoch, process all synchronously'''
@@ -108,14 +79,11 @@ class ProximalPolicyOptimisation:
         # here to be passed after iteration batch 
         if self.batch_number == self.batch_size - 1 :
             self.batch_number = 0
-            # self.model.eval()
             # Calculate Score (averaged over agents)
-            # score = torch.cat(self.rewards, dim=0).sum(dim=0).mean()
-
             # Append Values collesponding to last states
             # Get the expected_value
             Expected_Q_values = self.model.critic_expect(next_states).detach()
-            advantages, returns = self.calc_returns(torch.stack(self.rewards),
+            advantages, returns = self.gae.CalcReturns(torch.stack(self.rewards),
                                                     torch.cat(self.target_q_value, dim=0),
                                                     torch.stack(self.dones),
                                                     Expected_Q_values)
@@ -131,11 +99,12 @@ class ProximalPolicyOptimisation:
             rewards = torch.stack(self.rewards).reshape([-1])
             dones = torch.stack(self.dones).reshape([-1])
             # target_q_value = torch.cat(self.target_q_value, dim=0).reshape([-1])
-            log_probs = torch.stack(self.GAE_log_prob).reshape([-1])
+            log_probs = torch.stack(self.log_prob_gae).reshape([-1])
 
             advantages = advantages.reshape([-1])
             returns = returns.reshape([-1])
 
+            self.reset()
             # Mini-batch update
             self.model.train()
             n_sample = advantages.shape[0]
@@ -239,3 +208,41 @@ class FCNetwork(nn.Module):
             x = self.func(layer(x))
 
         return x
+
+class GAE():
+    def __init__(self, batch_size, num_agents, gamma, gae_lambda, device):
+        self.batch_size = batch_size
+        self.num_agents = num_agents
+        self.device = device
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+
+    def CalcReturns(self, rewards, values, dones, last_Q_values):
+        n_step = rewards.shape[0]
+
+        # Create empty buffer
+        GAE = torch.zeros_like(rewards).float().to(self.device)
+        returns = torch.zeros_like(rewards).float().to(self.device)
+
+        # Set start values
+        GAE_current = torch.zeros(self.num_agents).float().to(self.device)
+        returns_current = last_Q_values
+        values_next = last_Q_values
+
+        for irow in reversed(range(n_step)):
+            values_current = values[irow]
+            rewards_current = rewards[irow]
+            gamma = self.gamma * (1. - dones[irow].float())
+
+            # Calculate TD Error
+            td_error = rewards_current + gamma * values_next - values_current
+            # Update GAE, returns
+            GAE_current = td_error + gamma * self.gae_lambda * GAE_current
+            returns_current = rewards_current + gamma * returns_current
+            # Set GAE, returns to buffer
+            GAE[irow] = GAE_current
+            returns[irow] = returns_current
+
+            values_next = values_current
+
+        return GAE, returns

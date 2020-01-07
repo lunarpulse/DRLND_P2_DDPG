@@ -138,7 +138,7 @@ if __name__ == "__main__":
     fc1 = 256
     fc2 = 128
     batch_size = 256
-    agent = ProximalPolicyOptimisation(env, state_dim, action_dim, hiddens=[fc1, fc2],  tmax=batch_size, n_epoch=10, batch_size=batch_size, eps=0.1, device=device)
+    agent = ProximalPolicyOptimisation(env, state_dim, action_dim, num_agents = num_agents, hiddens=[fc1, fc2],  tmax=batch_size, n_epoch=10, batch_size=batch_size, eps=0.1, device=device)
 
     n_episodes = 150
     print_every = 2
